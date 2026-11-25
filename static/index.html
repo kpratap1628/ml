@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DermaScan — Skin Lesion Classifier</title>
+<style>
+  :root { --ink:#17332e; --muted:#60746e; --line:#dfeae6; --accent:#1f7a67; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         background:#f4f8f6; color:var(--ink); }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 20px 60px; }
+  header { background: linear-gradient(115deg,#123d37,#247a68); color:#fff;
+           border-radius: 20px; padding: 30px 34px; margin-bottom: 24px; }
+  header .kicker { font-size:12px; letter-spacing:2px; text-transform:uppercase; opacity:.8; }
+  header h1 { margin:8px 0 6px; font-size:32px; }
+  header p { margin:0; opacity:.9; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:18px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:22px; }
+  .card h2 { margin:0 0 14px; font-size:16px; }
+  .drop { border:2px dashed #9dbfb5; border-radius:14px; padding:26px 16px; text-align:center;
+          color:var(--muted); cursor:pointer; transition: background .15s; }
+  .drop.over, .drop:hover { background:#f0f7f4; }
+  .drop strong { color:var(--accent); }
+  input[type=file] { display:none; }
+  #preview { width:100%; max-height:260px; object-fit:contain; border-radius:12px;
+             border:1px solid var(--line); margin-top:14px; display:none; }
+  button { width:100%; margin-top:16px; padding:12px; border:0; border-radius:10px;
+           background:var(--accent); color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
+  button:disabled { background:#b6cbc5; cursor:not-allowed; }
+  .top { font-size:13px; color:var(--muted); }
+  .code { font-size:38px; font-weight:700; margin:4px 0; text-transform:uppercase; letter-spacing:1px; }
+  .label { color:var(--muted); margin-bottom:16px; }
+  .bar-row { display:grid; grid-template-columns: 64px 1fr 52px; gap:10px;
+             align-items:center; font-size:13px; margin:8px 0; }
+  .bar { height:10px; border-radius:6px; background:#eaf1ee; overflow:hidden; }
+  .bar span { display:block; height:100%; background:var(--accent); border-radius:6px;
+              transition: width .4s; }
+  .bar-row.best .bar span { background:#0f574a; }
+  .bar-row.best { font-weight:600; }
+  .pct { text-align:right; font-variant-numeric: tabular-nums; }
+  .note { font-size:12px; color:var(--muted); margin-top:16px; line-height:1.5; }
+  .err { color:#a33222; font-size:14px; margin-top:12px; }
+  .placeholder { color:var(--muted); font-size:14px; }
+  .spinner { display:none; margin-top:12px; font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="kicker">AI &middot; Research prototype</div>
+    <h1>DermaScan</h1>
+    <p>Skin-lesion image classification &mdash; 7-class CNN trained on HAM10000.</p>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <h2>1. Upload a lesion image</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/jpeg,image/png">
+        <div>Drop a JPG/PNG here or <strong>click to browse</strong></div>
+      </label>
+      <img id="preview" alt="Uploaded image preview">
+      <button id="go" disabled>Analyze image</button>
+      <div class="spinner" id="spinner">Running inference&hellip;</div>
+      <div class="err" id="err"></div>
+    </section>
+
+    <section class="card">
+      <h2>2. Prediction</h2>
+      <div id="result">
+        <p class="placeholder">Results will appear here after you analyze an image.</p>
+      </div>
+    </section>
+  </div>
+
+  <p class="note">
+    Experimental educational classifier, not a medical device. It cannot diagnose or rule out
+    cancer and does not replace assessment by a qualified dermatologist. Seek medical advice for
+    any changing, bleeding, painful, or otherwise concerning lesion.
+  </p>
+</div>
+
+<script>
+const fileInput = document.getElementById('file');
+const drop = document.getElementById('drop');
+const preview = document.getElementById('preview');
+const go = document.getElementById('go');
+const spinner = document.getElementById('spinner');
+const errBox = document.getElementById('err');
+const result = document.getElementById('result');
+let selected = null;
+
+function setFile(file) {
+  if (!file) return;
+  selected = file;
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = 'block';
+  go.disabled = false;
+  errBox.textContent = '';
+}
+
+fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+['dragover', 'dragleave', 'drop'].forEach(evt =>
+  drop.addEventListener(evt, e => {
+    e.preventDefault();
+    drop.classList.toggle('over', evt === 'dragover');
+    if (evt === 'drop') setFile(e.dataTransfer.files[0]);
+  })
+);
+
+go.addEventListener('click', async () => {
+  if (!selected) return;
+  go.disabled = true;
+  spinner.style.display = 'block';
+  errBox.textContent = '';
+  try {
+    const body = new FormData();
+    body.append('file', selected);
+    const res = await fetch('/predict', { method: 'POST', body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    render(data);
+  } catch (e) {
+    errBox.textContent = 'Error: ' + e.message;
+  } finally {
+    spinner.style.display = 'none';
+    go.disabled = false;
+  }
+});
+
+function render(data) {
+  const p = data.prediction;
+  const rows = [...data.scores]
+    .sort((a, b) => b.probability - a.probability)
+    .map(s => `
+      <div class="bar-row ${s.code === p.code ? 'best' : ''}">
+        <span>${s.code}</span>
+        <div class="bar"><span style="width:${(s.probability * 100).toFixed(1)}%"></span></div>
+        <span class="pct">${(s.probability * 100).toFixed(1)}%</span>
+      </div>`).join('');
+  result.innerHTML = `
+    <div class="top">Top prediction</div>
+    <div class="code">${p.code}</div>
+    <div class="label">${p.label} &middot; confidence ${(p.confidence * 100).toFixed(1)}%</div>
+    ${rows}
+    <p class="note">${data.disclaimer}</p>`;
+}
+</script>
+</body>
+</html>
